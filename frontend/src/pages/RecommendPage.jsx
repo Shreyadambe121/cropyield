@@ -1,5 +1,60 @@
 import { useState } from 'react';
-import api from '../services/api';
+import cropYieldCsv from '../../../data/crop_yield.csv?raw';
+
+const [headerLine, ...dataLines] = cropYieldCsv.trim().split(/\r?\n/);
+const headers = headerLine.split(',');
+const numericFields = new Set(['Area', 'Rainfall', 'Temperature', 'Yield']);
+const sampleRows = dataLines.map((line) => {
+  const values = line.split(',');
+  return Object.fromEntries(headers.map((header, index) => [
+    header,
+    numericFields.has(header) ? Number(values[index]) : values[index],
+  ]));
+});
+const states = [...new Set(sampleRows.map((row) => row.State))].sort();
+const districtsByState = Object.fromEntries(states.map((state) => [
+  state,
+  [...new Set(sampleRows.filter((row) => row.State === state).map((row) => row.District))].sort(),
+]));
+const seasons = [...new Set([...sampleRows.map((row) => row.Season), 'Autumn', 'Rainy', 'Summer'])].sort();
+const crops = [...new Set(sampleRows.map((row) => row.Crop))].sort();
+
+function normalizeSeason(season) {
+  return season.toLowerCase() === 'rainy' ? 'kharif' : season.toLowerCase();
+}
+
+function recommendCrops(form) {
+  const ranked = crops.map((crop) => {
+    const nearbyRows = sampleRows
+      .filter((row) => row.Crop === crop)
+      .map((row) => {
+        const distance = (row.State === form.state ? 0 : 8)
+          + (row.District === form.district ? 0 : 4)
+          + (normalizeSeason(row.Season) === normalizeSeason(form.season) ? 0 : 5)
+          + Math.abs(row.Area - form.area) / 10
+          + Math.abs(row.Rainfall - form.rainfall) / 1000
+          + Math.abs(row.Temperature - form.temperature) / 10;
+        return { row, distance };
+      })
+      .sort((first, second) => first.distance - second.distance)
+      .slice(0, 3);
+    const weights = nearbyRows.map(({ distance }) => 1 / (distance + 0.1) ** 2);
+    const weightTotal = weights.reduce((total, weight) => total + weight, 0);
+    const expectedYield = nearbyRows.reduce((total, item, index) => total + item.row.Yield * weights[index], 0) / weightTotal;
+
+    return { crop, expected_yield: Math.round(expectedYield * 100) / 100, score: weightTotal };
+  }).sort((first, second) => second.score - first.score);
+  const totalScore = ranked.reduce((total, item) => total + item.score, 0);
+
+  return ranked.slice(0, 5).map((item) => {
+    const probability = item.score / totalScore;
+    return {
+      ...item,
+      probability,
+      suitability: probability >= 0.4 ? 'High' : probability >= 0.2 ? 'Medium' : 'Low',
+    };
+  });
+}
 
 const defaultForm = {
   state: 'Maharashtra',
@@ -13,21 +68,21 @@ const defaultForm = {
 export default function RecommendPage() {
   const [form, setForm] = useState(defaultForm);
   const [recommendations, setRecommendations] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
-    setLoading(true);
     setError('');
-    try {
-      const response = await api.post('/api/recommend-crops', form);
-      setRecommendations(response.data.recommendations || []);
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Recommendation failed');
-    } finally {
-      setLoading(false);
+    const area = Number(form.area);
+    const rainfall = Number(form.rainfall);
+    const temperature = Number(form.temperature);
+    if (!Number.isFinite(area) || !Number.isFinite(rainfall) || !Number.isFinite(temperature)
+      || area <= 0 || rainfall < 0) {
+      setRecommendations([]);
+      setError('Enter a positive area and valid rainfall and temperature values.');
+      return;
     }
+    setRecommendations(recommendCrops({ ...form, area, rainfall, temperature }));
   };
 
   return (
@@ -43,19 +98,23 @@ export default function RecommendPage() {
             <div className="grid gap-4">
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">State</label>
-                <input className="input" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
+                <select className="input" value={form.state} onChange={(e) => {
+                  const state = e.target.value;
+                  setForm({ ...form, state, district: districtsByState[state][0] });
+                }}>
+                  {states.map((state) => <option key={state} value={state}>{state}</option>)}
+                </select>
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">District</label>
-                <input className="input" value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} />
+                <select className="input" value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })}>
+                  {districtsByState[form.state].map((district) => <option key={district} value={district}>{district}</option>)}
+                </select>
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">Season</label>
                 <select className="input" value={form.season} onChange={(e) => setForm({ ...form, season: e.target.value })}>
-                  <option>Kharif</option>
-                  <option>Rabi</option>
-                  <option>Summer</option>
-                  <option>Annual</option>
+                  {seasons.map((season) => <option key={season} value={season}>{season}</option>)}
                 </select>
               </div>
               <div>
@@ -72,7 +131,7 @@ export default function RecommendPage() {
               </div>
             </div>
             {error && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-            <button type="submit" className="btn-primary mt-6 w-full" disabled={loading}>{loading ? 'Recommending...' : 'Recommend Crops'}</button>
+            <button type="submit" className="btn-primary mt-6 w-full">Recommend Crops</button>
           </form>
 
           <div className="space-y-4">
@@ -84,7 +143,7 @@ export default function RecommendPage() {
                       <div className="text-2xl font-bold text-slate-900">{item.crop}</div>
                       <div className="text-sm text-slate-500">Suitability: <span className="font-semibold text-brand-700">{item.suitability}</span></div>
                     </div>
-                    <div className="rounded-full bg-brand-100 px-3 py-1 text-sm font-semibold text-brand-700">{item.probability * 100}%</div>
+                    <div className="rounded-full bg-brand-100 px-3 py-1 text-sm font-semibold text-brand-700">{Math.round(item.probability * 100)}% match</div>
                   </div>
                   <div className="mt-4 flex items-end justify-between">
                     <div>

@@ -126,17 +126,17 @@ A sample crop dataset is included at `/data/crop_yield.csv` for development and 
 
 ### Backend
 1. Create a Python web service on Render.
-2. Set root directory to `backend`.
+2. Leave the root directory unset so the backend can access the repository-level `data/` directory.
 3. Use build command:
 
 ```bash
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 ```
 
 4. Use start command:
 
 ```bash
-PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port $PORT
+uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT
 ```
 
 5. Add environment variables:

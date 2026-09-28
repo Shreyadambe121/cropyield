@@ -20,7 +20,8 @@ def get_locations():
     data = load_training_data()
     states = sorted(data["State"].unique().tolist())
     districts = sorted(data["District"].unique().tolist())
-    return {"states": states, "districts": districts}
+    seasons = sorted(data["Season"].unique().tolist())
+    return {"states": states, "districts": districts, "seasons": seasons}
 
 
 @router.post("/api/recommend-crops")
